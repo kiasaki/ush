@@ -28,4 +28,6 @@ int ush_num_builtins(void);
 #define USH_TOKEN_BUFER_SIZE 64
 #define USH_TOKEN_DELIMITER " \t\r\n\a"
 
+char **ush_parse(char *line);
+
 #endif
