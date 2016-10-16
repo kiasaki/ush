@@ -153,8 +153,66 @@ cleanup:
 	exit(EXIT_SUCCESS);
 }
 
+void ush_run_file(char *filename) {
+	long flen;
+	char *fcontents;
+	FILE *f = fopen(filename, "r");
+	if (f == NULL) {
+		fprintf(stderr, "ush: can not read file %s\n", filename);
+		exit(EXIT_FAILURE);
+	}
+	
+	// go to the end, record length, go back to the start
+	fseek(f, 0L, SEEK_END);
+	flen = ftell(f);
+	fseek(f, 0L, SEEK_SET);
+
+	fcontents = (char*)calloc(flen, sizeof(char));
+	if (fcontents == NULL) {
+		fprintf(stderr, "ush: allocation error\n");
+		exit(EXIT_FAILURE);
+	}
+
+	fread(fcontents, sizeof(char), flen, f);
+	fclose(f);
+
+	char *line = strtok(fcontents, "\r\n");
+	while(line != NULL) {
+		char **command = ush_parse(line);
+		int result = ush_execute(command);
+
+		free(command);
+
+		if (result == 0) {
+			exit(EXIT_SUCCESS);
+		}
+
+		line = strtok(NULL, "\r\n");
+	}
+
+	free(fcontents);
+}
+
+void ush_run_user_config(char *config_filename) {
+	char *expanded_filename = ush_config_file_path(config_filename);
+
+	// check the file exists
+	FILE *f = fopen(expanded_filename, "r");
+	if (f == NULL) {
+		return;
+	}
+	fclose(f);
+
+	ush_run_file(expanded_filename);
+	free(expanded_filename);
+}
+
 int main(int argc, char **argv) {
     char *program_name = argv[0];
+
+	bool ran_file = false;
+
+	ush_run_user_config(".ushrc");
 
 	while(argc > 1) {
 		argc--;
@@ -168,8 +226,19 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "  --help    show this message, then exit\n");
 			fprintf(stderr, "  --version show ush version number, then exit\n");
 			exit(EXIT_SUCCESS);
+		} else {
+			ran_file = true;
+
+			ush_run_file(*argv);
 		}
 	}
+
+	if (ran_file) {
+		// don't start a session, we just wanted to run a file
+		exit(EXIT_SUCCESS);
+	}
+
+	ush_run_user_config(".ush_profile");
 
 	ush_init();
 

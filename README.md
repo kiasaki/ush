@@ -54,9 +54,11 @@ tab       autocomplete command
 **builtin commands**
 
 ```
-help      shows the help message
-cd        changes the current directory
-exit      quits the shell session
+cd        changes current directory
+help      prints builtin functions
+exit      exits the shell
+setenv    sets environment variable named arg0 to arg1
+unsetenv  deletes environment variable named arg0
 ```
 
 ## missing

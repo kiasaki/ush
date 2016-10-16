@@ -5,10 +5,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <limits.h>
 #include <wordexp.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #include "linenoise.h"
 
 #define USH_VERSION "0.0.1"
@@ -25,17 +26,16 @@ void ush_update_prompt(void);
 int ush_cd(char **command);
 int ush_help(char **command);
 int ush_exit(char **command);
+int ush_setenv(char **command);
+int ush_unsetenv(char **command);
 
-extern char *builtin_str[3];
-extern char *builtin_help[3];
-extern int (*builtin_func[3]) (char **);
+extern char *builtin_str[5];
+extern char *builtin_help[5];
+extern int (*builtin_func[5]) (char **);
 
 int ush_num_builtins(void);
 
 // Parsing
-#define USH_TOKEN_BUFER_SIZE 64
-#define USH_TOKEN_DELIMITER " \t\r\n\a"
-
 char **ush_parse(char *line);
 
 #endif
