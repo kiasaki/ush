@@ -1,34 +1,20 @@
 #include "ush.h"
 
 char **ush_parse(char *line) {
-	int bufsize = USH_TOKEN_BUFER_SIZE;
-	int position = 0;
-	char **tokens = malloc(bufsize * sizeof(char*));
-	char *token;
-
-	if (!tokens) {
-		fprintf(stderr, "ush: allocation error\n");
+	wordexp_t webuff;
+	if (wordexp(line, &webuff, 0) != 0) {
+		fprintf(stderr, "ush: word expansion error\n");
 		exit(EXIT_FAILURE);
 	}
 
-	token = strtok(line, USH_TOKEN_DELIMITER);
-	while (token != NULL) {
-		tokens[position] = token;
-		position++;
-
-		// grow buffersize to fit token
-		if (position >= bufsize) {
-			bufsize += USH_TOKEN_BUFER_SIZE;
-			tokens = realloc(tokens, bufsize * sizeof(char*));
-			if (!tokens) {
-				fprintf(stderr, "lsh: allocation error\n");
-				exit(EXIT_FAILURE);
-			}
-		}
-
-		token = strtok(NULL, USH_TOKEN_DELIMITER);
+	char **command = malloc((webuff.we_wordc + 1) * sizeof(char *));
+	for (size_t i = 0; i < webuff.we_wordc; i++) {
+		command[i] = malloc((strlen(webuff.we_wordv[i]) + 1) * sizeof(char));
+		strcpy(command[i], webuff.we_wordv[i]);
 	}
+	command[webuff.we_wordc] = NULL;
 
-	tokens[position] = NULL;
-	return tokens;
+	wordfree(&webuff);
+
+	return command;
 }
