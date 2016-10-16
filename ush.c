@@ -128,19 +128,23 @@ int ush_execute(char **command) {
 
 void ush_loop(void) {
 	char *history_file = ush_config_file_path(".ush_history");
-	char *line;
+	char *line = linenoise(ush_prompt);
 
-    while((line = linenoise(ush_prompt)) != NULL) {
-		linenoiseHistoryAdd(line);
-		linenoiseHistorySave(history_file);
+    while (true) {
+		if (line != NULL) {
+			linenoiseHistoryAdd(line);
+			linenoiseHistorySave(history_file);
 
-		char **command = ush_parse(line);
-		int result = ush_execute(command);
-		free(line);
-		free(command);
-		if (result == 0) {
-			goto cleanup;
+			char **command = ush_parse(line);
+			int result = ush_execute(command);
+			free(line);
+			free(command);
+			if (result == 0) {
+				goto cleanup;
+			}
 		}
+
+		line = linenoise(ush_prompt);
 	}
 
 cleanup:
