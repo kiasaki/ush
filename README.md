@@ -59,6 +59,38 @@ cd        changes the current directory
 exit      quits the shell session
 ```
 
+## missing
+
+**Missing aliases?**
+
+You can get aliases by create a shell script in a `bin/` directory that is in you path:
+
+`~/bin/ll`
+
+```sh
+#!/bin/sh
+ls -la
+```
+
+**Missing a fancy colored prompt?**
+
+Prompts, like color schemes and theme, because the plethora of choices can be a great waste
+of time. Try using ush's prompt a little bit, you'll get used to it pretty fast.
+
+Now, you might be missing information that used to be displayed for you in that prompt you had.
+Here are a few commands that can give you exactly that info only when you actually need it:
+
+```
+ush$ pwd
+/Users/kiasaki/code/repos/ush
+ush$ date
+Sun 16 Oct 2016 11:46:26 EDT
+ush$ whoami
+kiasaki
+ush$ git status -sb
+## master
+```
+
 ## license
 
 MIT. See `LICENSE` file.
