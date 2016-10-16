@@ -1,7 +1,8 @@
 #include "ush.h"
 
 char **ush_parse(char *line) {
-	int bufsize = USH_TOKEN_BUFER_SIZE, position = 0;
+	int bufsize = USH_TOKEN_BUFER_SIZE;
+	int position = 0;
 	char **tokens = malloc(bufsize * sizeof(char*));
 	char *token;
 

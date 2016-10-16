@@ -29,6 +29,7 @@ int ush_cd(char **command) {
 		if (chdir(command[1]) != 0) {
 			perror("ush");
 		}
+		ush_update_prompt();
 	}
 	return 1;
 }

@@ -3,15 +3,23 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits.h>
+#include <wordexp.h>
 #include "linenoise.h"
 
 #define USH_VERSION "0.0.1"
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+
+#define MAX_PROMPT_SZ 1024
+
+// Init
+void ush_update_prompt(void);
 
 // Builtins
 int ush_cd(char **command);

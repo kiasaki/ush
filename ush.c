@@ -1,5 +1,7 @@
 #include "ush.h"
 
+char * volatile ush_prompt;
+
 char *ush_config_file_path(char *filename) {
 	char *home_folder = getenv("HOME");
 	char *res;
@@ -7,16 +9,76 @@ char *ush_config_file_path(char *filename) {
 	return res;
 }
 
-void ush_completion(const char *buf, linenoiseCompletions *lc) {
-	if (buf[0] == 'h') {
-		linenoiseAddCompletion(lc,"hello");
+void ush_update_prompt(void) {
+	char* cwd;
+	char buff[PATH_MAX + 1];
+
+	cwd = getcwd(buff, PATH_MAX + 1);
+
+	if (cwd == NULL) {
+		fprintf(stderr, "ush: getcwd error\n");
+		exit(EXIT_FAILURE);
 	}
+
+	int cwdlen = strlen(cwd);
+	if (cwd[cwdlen] == '/') {
+		cwd[cwdlen] = '\0';
+	}
+	char *cwd_folder_start = strrchr(cwd, '/');
+	if (cwd_folder_start != 0 && cwdlen > 1) {
+		cwd_folder_start += 1;
+	}
+
+	snprintf(ush_prompt, MAX_PROMPT_SZ, "%s$ ", cwd_folder_start);
+}
+
+void ush_completion(const char *buf, linenoiseCompletions *lc) {
+	char *last_command_argument = strrchr(buf, ' ');
+	if (last_command_argument == NULL) {
+		// just start from the beginning
+		last_command_argument = buf;
+	} else if (strlen(last_command_argument) > 0)  {
+		// move pointer past prefixed space
+		last_command_argument += 1;
+	}
+
+	char glob_path[strlen(last_command_argument) + 3];
+	sprintf(glob_path, "%s**", last_command_argument);
+
+	wordexp_t webuff;
+	if (wordexp(glob_path, &webuff, WRDE_NOCMD) != 0) {
+		fprintf(stderr, "ush: word expansion error\n");
+		exit(EXIT_FAILURE);
+	}
+
+	for (size_t i = 0; i < webuff.we_wordc; i++) {
+		if (strcmp(webuff.we_wordv[i], glob_path) == 0) {
+			// when the expanded string is the same as input
+			continue;
+		}
+
+		int command_start_length = strlen(buf) - strlen(last_command_argument);
+		int match_length = strlen(webuff.we_wordv[i]);
+		char full_completion[command_start_length + match_length + 1];
+		for (int j = 0; j < command_start_length; j++) {
+			full_completion[j] = buf[j];
+		}
+		full_completion[command_start_length] = '\0';
+		strcat(full_completion, webuff.we_wordv[i]);
+
+		linenoiseAddCompletion(lc, full_completion);
+	}
+
+	wordfree(&webuff);
 }
 
 void ush_init(void) {
 	linenoiseSetMultiLine(1);
 	linenoiseHistorySetMaxLen(10000);
-	// linenoiseSetCompletionCallback(ush_completion);
+	linenoiseSetCompletionCallback(ush_completion);
+
+	ush_prompt = malloc(MAX_PROMPT_SZ);
+	ush_update_prompt();
 
 	char *history_file = ush_config_file_path(".ush_history");
 	linenoiseHistoryLoad(history_file);
@@ -66,9 +128,9 @@ int ush_execute(char **command) {
 
 void ush_loop(void) {
 	char *history_file = ush_config_file_path(".ush_history");
-	char *prompt = "$ ";
 	char *line;
-    while((line = linenoise(prompt)) != NULL) {
+
+    while((line = linenoise(ush_prompt)) != NULL) {
 		linenoiseHistoryAdd(line);
 		linenoiseHistorySave(history_file);
 
@@ -77,11 +139,14 @@ void ush_loop(void) {
 		free(line);
 		free(command);
 		if (result == 0) {
-			free(history_file);
-			exit(EXIT_SUCCESS);
+			goto cleanup;
 		}
 	}
+
+cleanup:
 	free(history_file);
+	free(ush_prompt);
+	exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char **argv) {
