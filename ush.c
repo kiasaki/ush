@@ -93,7 +93,11 @@ int ush_launch(char **command) {
 	if (pid == 0) {
 		// Child process
 		if (execvp(command[0], command) == -1) {
-			perror("ush");
+			char *error_message = malloc((strlen(command[0])+6) * sizeof(char));
+			strcpy(&error_message[0], "ush[");
+			strcpy(&error_message[4], command[0]);
+			strcpy(&error_message[4+strlen(command[0])], "]\0");
+			perror(error_message);
 		}
 		exit(EXIT_FAILURE);
 	} else if (pid < 0) {

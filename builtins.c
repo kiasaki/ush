@@ -5,7 +5,8 @@ char *builtin_str[] = {
 	"help",
 	"exit",
 	"setenv",
-	"unsetenv"
+	"unsetenv",
+	"source",
 };
 
 char *builtin_help[] = {
@@ -13,7 +14,8 @@ char *builtin_help[] = {
 	"prints builtin functions",
 	"exits the shell",
 	"sets environment variable named arg0 to arg1",
-	"deletes environment variable named arg0"
+	"deletes environment variable named arg0",
+	"reads file and executes it's contents",
 };
 
 int (*builtin_func[]) (char **) = {
@@ -21,7 +23,8 @@ int (*builtin_func[]) (char **) = {
 	&ush_help,
 	&ush_exit,
 	&ush_setenv,
-	&ush_unsetenv
+	&ush_unsetenv,
+	&ush_source,
 };
 
 int ush_num_builtins() {
@@ -72,6 +75,15 @@ int ush_unsetenv(char **command) {
 		if (unsetenv(command[1]) != 0) {
 			fprintf(stderr, "ush: unsetenv error\n");
 		}
+	}
+	return 1;
+}
+
+int ush_source(char **command) {
+	if (command[1] == NULL) {
+		fprintf(stderr, "ush: expected argument to \"source\"\n");
+	} else {
+		ush_run_file(command[1]);
 	}
 	return 1;
 }

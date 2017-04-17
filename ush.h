@@ -22,16 +22,19 @@
 // Init
 void ush_update_prompt(void);
 
+void ush_run_file(char *filename);
+
 // Builtins
 int ush_cd(char **command);
 int ush_help(char **command);
 int ush_exit(char **command);
 int ush_setenv(char **command);
 int ush_unsetenv(char **command);
+int ush_source(char **command);
 
-extern char *builtin_str[5];
-extern char *builtin_help[5];
-extern int (*builtin_func[5]) (char **);
+extern char *builtin_str[6];
+extern char *builtin_help[6];
+extern int (*builtin_func[6]) (char **);
 
 int ush_num_builtins(void);
 
