@@ -7,9 +7,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/kballard/go-shellquote"
 	"github.com/peterh/liner"
@@ -79,6 +82,7 @@ func parseFile(contents string) [][][]string {
 func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, ch chan<- bool) {
 	go func() {
 		cmd := exec.Command(command[0], command[1:]...)
+		cmd.Stderr = os.Stderr
 
 		if in == nil {
 			cmd.Stdin = os.Stdout
@@ -96,6 +100,7 @@ func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, c
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
 		} else {
+			currentCmd = cmd
 			err = cmd.Wait()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
@@ -203,6 +208,9 @@ func executeCommand(commands [][]string) {
 	processes := len(commands)
 	pipes := makeSubprocessPipes(processes)
 
+	// Stop line to reset terminal input settings
+	line.Close()
+
 	ch := make(chan bool, len(commands))
 	for i, command := range commands {
 
@@ -221,6 +229,9 @@ func executeCommand(commands [][]string) {
 	}
 
 	waitSubprocess(processes, ch)
+
+	// Restart liner
+	initLiner()
 }
 
 func executeCommandText(text string) {
@@ -241,13 +252,40 @@ func executeCommandFile(fileName string) {
 	}
 }
 
+var line *liner.State
 var cwd string
+var currentCmd *exec.Cmd
 var configFileName string
 var historyFileName string
 var historyFile *os.File
 var aliases = map[string]string{}
 
 func init() {
+	// Forward signals to running commands
+	sigc := make(chan os.Signal, 5)
+	signal.Notify(sigc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+	go func() {
+		for {
+			select {
+			case s := <-sigc:
+				if currentCmd != nil {
+					currentCmd.Process.Signal(s)
+				} else if s == syscall.SIGTERM {
+					fmt.Fprintf(os.Stderr, "ush: got SIGTERM, exiting\n")
+					quit(0)
+				} else if s == syscall.SIGQUIT {
+					fmt.Fprintf(os.Stderr, "ush: got SIGQUIT, exiting\n")
+					quit(0)
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
 	var err error
 	cwd, err = os.Getwd()
 	if err != nil {
@@ -265,7 +303,7 @@ func init() {
 }
 
 func initLiner() *liner.State {
-	line := liner.NewLiner()
+	line = liner.NewLiner()
 	line.SetCompleter(func(line string) (c []string) {
 		return
 	})
@@ -305,8 +343,10 @@ func main() {
 		quit(0)
 	}
 
-	line := initLiner()
-	defer line.Close()
+	initLiner()
+	defer func() {
+		line.Close()
+	}()
 
 	for {
 		prompt := filepath.Base(cwd) + "$ "
