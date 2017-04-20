@@ -4,12 +4,13 @@ _A shell with a microscopic feature set_
 
 ## introduction
 
-`ush` is a simple shell, built atop the great **lineoise** line editing library, implementing just the necessary. It currently implements nice line editing, simple wordexp based autocompletion, a fixed prompt and the help, cd and exit builtins.
+`ush` is a simple shell, built atop the great **liner** line editing library (similar to **linenoise**), implementing just the necessary. It currently implements nice line editing, simple file name autocompletion, a fixed prompt, piping and the cd, set, unset, alias and exit builtins.
 
 ## installing
 
 ```
-make clean install
+make
+make install
 ```
 
 ## using
@@ -54,30 +55,29 @@ tab       autocomplete command
 **builtin commands**
 
 ```
-cd        changes current directory
-help      prints builtin functions
-exit      exits the shell
-setenv    sets environment variable named arg0 to arg1
-unsetenv  deletes environment variable named arg0
+cd     changes current directory
+exit   exits the shell
+set    sets environment variable named arg1 to arg2
+unset  deletes environment variable named arg1
+alias  registers a named (arg1) alias for a command (arg2)
 ```
 
 ## missing
 
-**Missing aliases?**
+**Missing redirection?**
 
-You can get aliases by create a shell script in a `bin/` directory that is in you path:
+For input (`<`) try using `cat` and piping that into the command.
 
-`~/bin/ll`
+For output (`>`) try using `tee` and pipes.
 
-```sh
-#!/bin/sh
-ls -la
-```
+For more complex command try building them in multiple steps, using intermediary
+files or creating a script file for it.
 
 **Missing a fancy colored prompt?**
 
-Prompts, like color schemes and theme, because the plethora of choices can be a great waste
-of time. Try using ush's prompt a little bit, you'll get used to it pretty fast.
+Prompts, like color schemes and theme, are not a thing in `ush` because the plethora
+of choice and constant switching and tweaking can be a great waste of time. Try using
+ush's prompt a little bit, you'll get used to it pretty fast.
 
 Now, you might be missing information that used to be displayed for you in that prompt you had.
 Here are a few commands that can give you exactly that info only when you actually need it:
@@ -89,6 +89,8 @@ ush$ date
 Sun 16 Oct 2016 11:46:26 EDT
 ush$ whoami
 kiasaki
+ush$ hostname
+kiasaki-mbp
 ush$ git status -sb
 ## master
 ```
@@ -96,6 +98,3 @@ ush$ git status -sb
 ## license
 
 MIT. See `LICENSE` file.
-
-Lineoise has it's own license at the top of the `lineoise.c` file.
-

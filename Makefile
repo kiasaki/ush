@@ -9,7 +9,7 @@ all: default
 $(TARGET): $(SOURCES)
 	go build -o $(TARGET) $(SOURCES)
 
-install:
+install: $(TARGET)
 	install ./ush /usr/local/bin/ush
 
 user-install:
