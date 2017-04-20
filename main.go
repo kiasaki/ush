@@ -18,7 +18,7 @@ import (
 	"github.com/peterh/liner"
 )
 
-var varRegexp = regexp.MustCompile(`\$[a-zA-Z]+`)
+var varRegexp = regexp.MustCompile(`\$[a-zA-Z_]+`)
 var globRegexp = regexp.MustCompile(`\*`)
 
 func parseLine(line string) [][]string {
@@ -213,7 +213,9 @@ func executeCommand(commands [][]string) {
 	pipes := makeSubprocessPipes(processes)
 
 	// Stop line to reset terminal input settings
-	line.Close()
+	if line != nil {
+	  line.Close()
+	}
 
 	ch := make(chan bool, len(commands))
 	for i, command := range commands {
