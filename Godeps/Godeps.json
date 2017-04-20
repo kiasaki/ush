@@ -1,0 +1,18 @@
+{
+	"ImportPath": "github.com/kiasaki/ush",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v79",
+	"Packages": [
+		"."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/kballard/go-shellquote",
+			"Rev": "d8ec1a69a250a17bb0e419c386eac1f3711dc142"
+		},
+		{
+			"ImportPath": "github.com/peterh/liner",
+			"Rev": "bf27d3ba8e1d9899d45a457ffac16c953eb2d647"
+		}
+	]
+}
