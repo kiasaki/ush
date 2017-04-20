@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -69,16 +70,6 @@ func parseLine(line string) [][]string {
 	return commands
 }
 
-func parseFile(contents string) [][][]string {
-	lines := [][][]string{}
-	for _, line := range strings.Split(contents, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, parseLine(line))
-		}
-	}
-	return lines
-}
-
 func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, ch chan<- bool) {
 	go func() {
 		cmd := exec.Command(command[0], command[1:]...)
@@ -103,7 +94,15 @@ func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, c
 			currentCmd = cmd
 			err = cmd.Wait()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
+				if exiterr, ok := err.(*exec.ExitError); ok {
+					if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+						os.Setenv("exit", strconv.Itoa(status.ExitStatus()))
+					} else {
+						fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
+				}
 			}
 
 			if in != nil {
@@ -188,9 +187,6 @@ func executeCommand(commands [][]string) {
 	} else if commands[0][0] == "alias" {
 		if len(commands[0]) != 3 {
 			fmt.Fprintf(os.Stderr, "ush: alias needs 2 arguments, got [%s]\n", shellquote.Join(commands[0]...))
-			for _, command := range commands {
-				fmt.Println(shellquote.Join(command...))
-			}
 			return
 		}
 		aliases[commands[0][1]] = commands[0][2]
@@ -214,7 +210,7 @@ func executeCommand(commands [][]string) {
 
 	// Stop line to reset terminal input settings
 	if line != nil {
-	  line.Close()
+		line.Close()
 	}
 
 	ch := make(chan bool, len(commands))
@@ -254,9 +250,10 @@ func executeCommandFile(fileName string) {
 		}
 	}
 
-	commandLines := parseFile(string(contents))
-	for _, commandLine := range commandLines {
-		executeCommand(commandLine)
+	for _, line := range strings.Split(string(contents), "\n") {
+		if strings.TrimSpace(line) != "" {
+			executeCommandText(line)
+		}
 	}
 }
 
@@ -270,6 +267,12 @@ var historyFile *os.File
 var aliases = map[string]string{}
 
 func init() {
+	// Set $SHELL
+	ex, err := os.Executable()
+	if err == nil {
+		os.Setenv("SHELL", ex)
+	}
+
 	// Forward signals to running commands
 	sigc := make(chan os.Signal, 5)
 	signal.Notify(sigc,
@@ -295,7 +298,6 @@ func init() {
 		}
 	}()
 
-	var err error
 	cwd, err = os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ush: can't get working directory\n")
