@@ -12,5 +12,8 @@ $(TARGET): $(SOURCES)
 install:
 	install ./ush /usr/local/bin/ush
 
+user-install:
+	install ./ush ${HOME}/bin/ush
+
 clean:
 	-rm -f ush

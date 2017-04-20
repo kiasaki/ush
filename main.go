@@ -54,9 +54,9 @@ func parseLine(line string) [][]string {
 				log.Fatal(err)
 			}
 			cmd = append(cmd, expandeds...)
-			//} else if trimed == "|" {
-			//	commands = append(commands, cmd)
-			//	cmd = make([]string, 0)
+		} else if trimed == "|" {
+			commands = append(commands, cmd)
+			cmd = make([]string, 0)
 		} else {
 			cmd = append(cmd, trimed)
 		}
@@ -159,12 +159,16 @@ func executeCommand(commands [][]string) {
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ush: error changing directory %v\n", err)
-			quit(1)
+			if !isInteractive {
+				quit(1)
+			}
 		}
 		cwd, err = os.Getwd()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ush: error getting current directory %v\n", err)
-			quit(1)
+			if !isInteractive {
+				quit(1)
+			}
 		}
 		return
 	} else if commands[0][0] == "set" {
@@ -243,7 +247,9 @@ func executeCommandFile(fileName string) {
 	contents, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ush: error reading file: %v\n%v\n", fileName, err)
-		quit(1)
+		if !isInteractive {
+			quit(1)
+		}
 	}
 
 	commandLines := parseFile(string(contents))
@@ -253,6 +259,7 @@ func executeCommandFile(fileName string) {
 }
 
 var line *liner.State
+var isInteractive = true
 var cwd string
 var currentCmd *exec.Cmd
 var configFileName string
@@ -302,11 +309,28 @@ func init() {
 	}
 }
 
+func autocomplete(line string) []string {
+	parts := strings.Split(strings.TrimSpace(line), " ")
+	if len(parts) == 0 {
+		suggestions, err := filepath.Glob("*")
+		if err != nil {
+			return []string{}
+		}
+		return suggestions
+	}
+	suggestions, err := filepath.Glob(parts[len(parts)-1] + "**")
+	if err != nil {
+		return []string{}
+	}
+	for i, s := range suggestions {
+		suggestions[i] = line[:len(line)-len(parts[len(parts)-1])] + s
+	}
+	return suggestions
+}
+
 func initLiner() *liner.State {
 	line = liner.NewLiner()
-	line.SetCompleter(func(line string) (c []string) {
-		return
-	})
+	line.SetCompleter(autocomplete)
 
 	if f, err := os.Open(historyFileName); err == nil {
 		line.ReadHistory(f)
@@ -339,6 +363,7 @@ func main() {
 	}
 
 	if len(os.Args) > 1 {
+		isInteractive = false
 		executeCommandFile(os.Args[1])
 		quit(0)
 	}
