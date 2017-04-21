@@ -20,7 +20,7 @@ import (
 )
 
 var varRegexp = regexp.MustCompile(`\$[a-zA-Z_]+`)
-var globRegexp = regexp.MustCompile(`\*`)
+var globRegexp = regexp.MustCompile(`^\*`)
 
 func parseLine(line string) [][]string {
 	words, err := shellquote.Split(line)
@@ -49,7 +49,7 @@ func parseLine(line string) [][]string {
 			return os.Getenv(match[1:])
 		})
 
-		if len(trimed) > 0 && trimed[0] == '*' {
+		if globRegexp.MatchString(trimed) {
 			expandeds, err := filepath.Glob(trimed)
 			if err != nil {
 				log.Fatal(err)
@@ -366,9 +366,21 @@ func main() {
 		executeCommandFile(configFileName)
 	}
 
-	if len(os.Args) > 1 {
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--" {
+			if i > 1 { // If we at least ran 1 file
+				quit(0)
+			}
+			break
+		} else if arg == "-c" {
+			i += 1
+			continue
+		} else if arg[0] == '-' { // We don't support args yet
+			continue
+		}
 		isInteractive = false
-		executeCommandFile(os.Args[1])
+		executeCommandFile(arg)
 		quit(0)
 	}
 
