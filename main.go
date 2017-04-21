@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,18 +16,133 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kballard/go-shellquote"
+	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterh/liner"
 )
 
 var varRegexp = regexp.MustCompile(`\$[a-zA-Z_]+`)
-var globRegexp = regexp.MustCompile(`^\*`)
 
-func parseLine(line string) [][]string {
+var currentCmd *exec.Cmd
+var currentState *State
+
+type State struct {
+	Cwd             string
+	IsInteractive   bool
+	Aliases         map[string]string
+	linerState      *liner.State
+	configFileName  string
+	historyFileName string
+	history         string
+}
+
+func NewState() *State {
+	s := &State{
+		Cwd:             "/",
+		IsInteractive:   false,
+		Aliases:         map[string]string{},
+		linerState:      nil,
+		configFileName:  "",
+		historyFileName: "",
+		history:         "",
+	}
+
+	if cwd, err := os.Getwd(); err != nil {
+		s.ReportError("error reading current directory")
+	} else {
+		s.Cwd = cwd
+	}
+
+	homeDir := os.Getenv("HOME")
+	if homeDir != "" {
+		s.configFileName = filepath.Join(homeDir, ".ushrc")
+		s.historyFileName = filepath.Join(homeDir, ".ush_history")
+	} else {
+		s.historyFileName = filepath.Join(os.TempDir(), ".ush_history")
+	}
+
+	if contents, err := ioutil.ReadFile(s.historyFileName); err != nil {
+		s.ReportError("error reading history file")
+	} else {
+		s.history = string(contents)
+	}
+
+	return s
+}
+
+func (s *State) Stop() {
+	if s.linerState != nil {
+		b := bytes.NewBuffer([]byte{})
+		s.linerState.WriteHistory(b)
+		s.history = string(b.Bytes())
+
+		s.linerState.Close()
+		s.linerState = nil
+	}
+}
+
+func (s *State) Start() {
+	s.linerState = liner.NewLiner()
+	s.linerState.SetCompleter(s.defaultAutocomplete)
+	s.linerState.ReadHistory(strings.NewReader(s.history))
+}
+
+func (s *State) Quit(statusCode int) {
+	// Stop liner and write history to s.history
+	s.Stop()
+
+	// Save history to disk
+	if err := ioutil.WriteFile(s.historyFileName, []byte(s.history), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "ush: error writing history file")
+	}
+
+	os.Exit(statusCode)
+}
+
+func (s *State) ReportError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "ush: "+format+"\n", args...)
+	if !s.IsInteractive {
+		s.Quit(1)
+	}
+}
+
+func (s *State) defaultAutocomplete(line string) []string {
+	// Parse current line
+	pipes := s.ParseLine(line)
+	parts := []string{}
+	for i := range pipes {
+		if i > 0 {
+			parts = append(parts, "|")
+		}
+		parts = append(parts, pipes[i]...)
+	}
+
+	// If we didn't write anything yet well have problem indexing later, do the simple case
+	if len(parts) == 0 {
+		if suggestions, err := filepath.Glob("*"); err != nil {
+			return []string{}
+		} else {
+			return suggestions
+		}
+	}
+
+	// Autocomplete line's last part
+	if suggestions, err := filepath.Glob(parts[len(parts)-1] + "**"); err != nil {
+		return []string{}
+	} else {
+		for i, s := range suggestions {
+			suggestions[i] = strings.Join(parts[:len(parts)-1], " ") + " " + s
+			if isDir(s) {
+				suggestions[i] += "/" // string(os.PathSeparator)
+			}
+		}
+		return suggestions
+	}
+}
+
+func (s *State) ParseLine(line string) [][]string {
 	words, err := shellquote.Split(line)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ush: error parsing line [%s] %v\n", line, err)
-		quit(1)
+		s.ReportError("error parsing line [%s] %v", line, err)
 	}
 
 	commands := make([][]string, 0)
@@ -40,6 +156,7 @@ func parseLine(line string) [][]string {
 			break
 		}
 
+		// Handle ~ as $HOME
 		if len(trimed) > 0 && trimed[0] == '~' {
 			trimed = filepath.Join(os.Getenv("HOME"), trimed[1:])
 		}
@@ -49,7 +166,8 @@ func parseLine(line string) [][]string {
 			return os.Getenv(match[1:])
 		})
 
-		if globRegexp.MatchString(trimed) {
+		if len(trimed) > 0 && trimed[0] == '*' {
+			// Handle basic glob
 			expandeds, err := filepath.Glob(trimed)
 			if err != nil {
 				log.Fatal(err)
@@ -70,45 +188,46 @@ func parseLine(line string) [][]string {
 	return commands
 }
 
-func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, ch chan<- bool) {
+// {{{ Execute
+func commandErrorExitCode(err error) (int, bool) {
+	if exiterr, ok := err.(*exec.ExitError); ok {
+		if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+			return status.ExitStatus(), true
+		}
+	}
+	return 0, false
+}
+
+func (s *State) createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, ch chan<- bool) {
 	go func() {
 		cmd := exec.Command(command[0], command[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
-		if in == nil {
-			cmd.Stdin = os.Stdout
-		} else {
+		if in != nil {
 			cmd.Stdin = in
 		}
-
-		if out == nil {
-			cmd.Stdout = os.Stdout
-		} else {
+		if out != nil {
 			cmd.Stdout = out
 		}
 
 		err := cmd.Start()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
+			s.ReportError("error running [%s] %v", shellquote.Join(command...), err)
 		} else {
-			currentCmd = cmd
+			currentCmd = cmd // Set global for signal fowarding
 			err = cmd.Wait()
 			if err != nil {
-				if exiterr, ok := err.(*exec.ExitError); ok {
-					if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
-						os.Setenv("exit", strconv.Itoa(status.ExitStatus()))
-					} else {
-						fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
-					}
+				if statusCode, ok := commandErrorExitCode(err); ok {
+					os.Setenv("exit", strconv.Itoa(statusCode))
 				} else {
-					fmt.Fprintf(os.Stderr, "ush: error running [%v] %v\n", strings.Join(command, " "), err)
+					s.ReportError("error running [%s] %v", shellquote.Join(command...), err)
 				}
 			}
-
 			if in != nil {
 				in.Close()
 			}
-
 			if out != nil {
 				out.Close()
 			}
@@ -118,12 +237,6 @@ func createSubprocess(command []string, in *io.PipeReader, out *io.PipeWriter, c
 	}()
 }
 
-func waitSubprocess(processes int, ch <-chan bool) {
-	for i := 0; i < processes; i++ {
-		<-ch
-	}
-}
-
 type DataPipes struct {
 	in  *io.PipeReader
 	out *io.PipeWriter
@@ -131,140 +244,160 @@ type DataPipes struct {
 
 func makeSubprocessPipes(processes int) []*DataPipes {
 	pipes := make([]*DataPipes, 0)
-
 	for i := 0; i < processes; i++ {
 		in, out := io.Pipe()
-
 		data := &DataPipes{in, out}
 		pipes = append(pipes, data)
 	}
-
 	return pipes
 }
 
-func executeCommand(commands [][]string) {
+func waitSubprocess(processes int, ch <-chan bool) {
+	for i := 0; i < processes; i++ {
+		<-ch
+	}
+}
+
+func (s *State) Execute(commands [][]string) {
 	if len(commands) == 0 || len(commands[0]) == 0 {
+		return // Skip empty commands
+	}
+
+	arg0 := commands[0][0]
+
+	// Handle builtins
+	if arg0 == "exit" {
+		s.BuiltinExit(commands[0])
+		return
+	} else if arg0 == "cd" {
+		s.BuiltinCd(commands[0])
+		return
+	} else if arg0 == "set" {
+		s.BuiltinSet(commands[0])
+		return
+	} else if arg0 == "unset" {
+		s.BuiltinUnset(commands[0])
+		return
+	} else if arg0 == "alias" {
+		s.BuiltinAlias(commands[0])
+		return
+	} else if arg0 == "source" {
+		s.BuiltinSource(commands[0])
 		return
 	}
 
-	if commands[0][0] == "exit" {
-		quit(0)
-	} else if commands[0][0] == "cd" {
-		var err error
-		if len(commands[0]) > 1 {
-			err = os.Chdir(commands[0][1])
-		} else {
-			err = os.Chdir(os.Getenv("HOME"))
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ush: error changing directory %v\n", err)
-			if !isInteractive {
-				quit(1)
-			}
-		}
-		cwd, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ush: error getting current directory %v\n", err)
-			if !isInteractive {
-				quit(1)
-			}
-		}
-		return
-	} else if commands[0][0] == "set" {
-		if len(commands[0]) != 3 {
-			fmt.Fprintf(os.Stderr, "ush: set needs 2 arguments, got [%s]\n", shellquote.Join(commands[0]...))
-			return
-		}
-		os.Setenv(commands[0][1], commands[0][2])
-		return
-	} else if commands[0][0] == "unset" {
-		if len(commands[0]) != 2 {
-			fmt.Fprintf(os.Stderr, "ush: unset needs 1 argument\n")
-			return
-		}
-		os.Unsetenv(commands[0][1])
-		return
-	} else if commands[0][0] == "alias" {
-		if len(commands[0]) != 3 {
-			fmt.Fprintf(os.Stderr, "ush: alias needs 2 arguments, got [%s]\n", shellquote.Join(commands[0]...))
-			return
-		}
-		aliases[commands[0][1]] = commands[0][2]
-		return
-	} else if commands[0][0] == "source" {
-		executeCommandFile(commands[0][1])
-		return
-	}
-
-	// Handle aliases
-	if value, ok := aliases[commands[0][0]]; ok {
+	// Replace aliases with aliased commands
+	if value, ok := s.Aliases[arg0]; ok {
 		commandRest := commands[0][1:]
 		commandsRest := commands[1:]
-		commands = parseLine(value)
+		commands = s.ParseLine(value)
 		commands[len(commands)-1] = append(commands[len(commands)-1], commandRest...)
 		commands = append(commands, commandsRest...)
 	}
 
-	processes := len(commands)
-	pipes := makeSubprocessPipes(processes)
+	// Stop liner to reset terminal input settings
+	s.Stop()
 
-	// Stop line to reset terminal input settings
-	if line != nil {
-		line.Close()
-	}
-
+	processCount := len(commands)
+	pipes := makeSubprocessPipes(processCount)
 	ch := make(chan bool, len(commands))
 	for i, command := range commands {
-
 		var in *io.PipeReader
 		var out *io.PipeWriter
 
 		if i != 0 {
 			in = pipes[i-1].in
 		}
-
 		if i != len(commands)-1 {
 			out = pipes[i].out
 		}
 
-		createSubprocess(command, in, out, ch)
+		s.createSubprocess(command, in, out, ch)
 	}
 
-	waitSubprocess(processes, ch)
+	waitSubprocess(processCount, ch)
 
 	// Restart liner
-	initLiner()
+	s.Start()
 }
 
-func executeCommandText(text string) {
-	commandLine := parseLine(text)
-	executeCommand(commandLine)
+// }}}
+
+func (s *State) ExecuteLine(line string) {
+	s.Execute(s.ParseLine(line))
 }
 
-func executeCommandFile(fileName string) {
-	contents, err := ioutil.ReadFile(fileName)
+func (s *State) ExecuteFile(fileName string) {
+	if contents, err := ioutil.ReadFile(fileName); err != nil {
+		s.ReportError("errror reading file: %v", fileName)
+	} else {
+		for _, line := range strings.Split(string(contents), "\n") {
+			s.ExecuteLine(line)
+		}
+	}
+}
+
+func (s *State) BuiltinExit(args []string) {
+	s.Quit(0)
+}
+
+func (s *State) BuiltinCd(args []string) {
+	var err error
+	if len(args) > 1 {
+		err = os.Chdir(args[1])
+	} else {
+		err = os.Chdir(os.Getenv("HOME"))
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ush: error reading file: %v\n%v\n", fileName, err)
-		if !isInteractive {
-			quit(1)
-		}
+		s.ReportError("error changing directory %v", err)
 	}
 
-	for _, line := range strings.Split(string(contents), "\n") {
-		if strings.TrimSpace(line) != "" {
-			executeCommandText(line)
-		}
+	if cwd, err := os.Getwd(); err != nil {
+		s.ReportError("error getting current directory %v", err)
+	} else {
+		s.Cwd = cwd
 	}
 }
 
-var line *liner.State
-var isInteractive = true
-var cwd string
-var currentCmd *exec.Cmd
-var configFileName string
-var historyFileName string
-var historyFile *os.File
-var aliases = map[string]string{}
+func (s *State) BuiltinSet(args []string) {
+	if len(args) != 3 {
+		s.ReportError("set needs 2 arguments, got [%s]", shellquote.Join(args...))
+		return
+	}
+	os.Setenv(args[1], args[2])
+}
+
+func (s *State) BuiltinUnset(args []string) {
+	if len(args) != 2 {
+		s.ReportError("unset needs 1 argument, got [%s]", shellquote.Join(args...))
+		return
+	}
+	os.Unsetenv(args[1])
+}
+
+func (s *State) BuiltinAlias(args []string) {
+	if len(args) != 3 {
+		s.ReportError("alias needs 2 arguments, got [%s]", shellquote.Join(args...))
+		return
+	}
+	s.Aliases[args[1]] = args[2]
+}
+
+func (s *State) BuiltinSource(args []string) {
+	if len(args) != 2 {
+		s.ReportError("source needs 1 argument, got [%s]", shellquote.Join(args...))
+		return
+	}
+	s.ExecuteFile(args[1])
+}
+
+// Returns if a file is a directory, returning false in case of any error
+func isDir(fileName string) bool {
+	if fileInfo, err := os.Stat(fileName); err == nil {
+		return fileInfo.IsDir()
+	}
+	return false
+}
 
 func init() {
 	// Set $SHELL
@@ -275,11 +408,7 @@ func init() {
 
 	// Forward signals to running commands
 	sigc := make(chan os.Signal, 5)
-	signal.Notify(sigc,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT)
+	signal.Notify(sigc, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		for {
 			select {
@@ -287,117 +416,56 @@ func init() {
 				if currentCmd != nil {
 					currentCmd.Process.Signal(s)
 				} else if s == syscall.SIGTERM {
-					fmt.Fprintf(os.Stderr, "ush: got SIGTERM, exiting\n")
-					quit(0)
+					currentState.ReportError("got SIGTERM, exiting")
+					currentState.Quit(1)
 				} else if s == syscall.SIGQUIT {
-					fmt.Fprintf(os.Stderr, "ush: got SIGQUIT, exiting\n")
-					quit(0)
+					currentState.ReportError("got SIGQUIT, exiting")
+					currentState.Quit(1)
 				}
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-
-	cwd, err = os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ush: can't get working directory\n")
-		quit(1)
-	}
-
-	homeDir := os.Getenv("HOME")
-	if homeDir != "" {
-		configFileName = filepath.Join(homeDir, ".ushrc")
-		historyFileName = filepath.Join(homeDir, ".ush_history")
-	} else {
-		historyFileName = filepath.Join(os.TempDir(), ".ush_history")
-	}
-}
-
-func autocomplete(line string) []string {
-	parts := strings.Split(strings.TrimSpace(line), " ")
-	if len(parts) == 0 {
-		suggestions, err := filepath.Glob("*")
-		if err != nil {
-			return []string{}
-		}
-		return suggestions
-	}
-	suggestions, err := filepath.Glob(parts[len(parts)-1] + "**")
-	if err != nil {
-		return []string{}
-	}
-	for i, s := range suggestions {
-		suggestions[i] = line[:len(line)-len(parts[len(parts)-1])] + s
-	}
-	return suggestions
-}
-
-func initLiner() *liner.State {
-	line = liner.NewLiner()
-	line.SetCompleter(autocomplete)
-
-	if f, err := os.Open(historyFileName); err == nil {
-		line.ReadHistory(f)
-		f.Close()
-	}
-
-	if f, err := os.Create(historyFileName); err != nil {
-		fmt.Fprintf(os.Stderr, "ush: error creating history file: %v\n", err)
-		quit(1)
-	} else {
-		historyFile = f
-	}
-
-	return line
-}
-
-func historyAppend(line *liner.State, input string) {
-	line.AppendHistory(input)
-	line.WriteHistory(historyFile)
-}
-
-func quit(code int) {
-	historyFile.Close()
-	os.Exit(code)
 }
 
 func main() {
-	if configFileName != "" {
-		executeCommandFile(configFileName)
+	currentState = NewState()
+	s := currentState
+
+	// Execute ~/.ushrc
+	if s.configFileName != "" {
+		s.ExecuteFile(s.configFileName)
 	}
 
-	for i := 1; i < len(os.Args); i++ {
-		arg := os.Args[i]
-		if arg == "--" {
-			if i > 1 { // If we at least ran 1 file
-				quit(0)
-			}
-			break
-		} else if arg == "-c" {
-			i += 1
-			continue
-		} else if arg[0] == '-' { // We don't support args yet
-			continue
+	// Handle args
+	ranFile := false
+	for _, arg := range os.Args[1:] {
+		if arg[0] == '-' {
+			break // ignore args or --
 		}
-		isInteractive = false
-		executeCommandFile(arg)
-		quit(0)
+		ranFile = true
+		s.ExecuteFile(arg)
+	}
+	if ranFile {
+		s.Quit(0) // Exit before starting interactive more if we ran a file
 	}
 
-	initLiner()
+	s.IsInteractive = true
+	s.Start()
 	defer func() {
-		line.Close()
+		s.Stop() // Ensure we exit cleanly
 	}()
 
+	// Main interactive loop
 	for {
-		prompt := filepath.Base(cwd) + "$ "
-		if input, err := line.Prompt(prompt); err == nil {
-			historyAppend(line, input)
-			executeCommandText(input)
+		prompt := filepath.Base(s.Cwd) + "$ "
+		if line, err := s.linerState.Prompt(prompt); err == nil {
+			s.linerState.AppendHistory(line)
+			s.ExecuteLine(line)
 		} else if err == liner.ErrPromptAborted {
 			continue
 		} else {
-			fmt.Printf("ush: error reading line: %v\n", err)
+			s.ReportError("ush: error reading line: %v", err)
 		}
 	}
 }
