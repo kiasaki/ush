@@ -60,10 +60,12 @@ func NewState() *State {
 		s.historyFileName = filepath.Join(os.TempDir(), ".ush_history")
 	}
 
-	if contents, err := ioutil.ReadFile(s.historyFileName); err != nil {
-		s.ReportError("error reading history file")
-	} else {
-		s.history = string(contents)
+	if _, err := os.Stat(s.historyFileName); err == nil {
+		if contents, err := ioutil.ReadFile(s.historyFileName); err != nil {
+			s.ReportError("error reading history file")
+		} else {
+			s.history = string(contents)
+		}
 	}
 
 	return s
@@ -269,6 +271,12 @@ func (s *State) Execute(commands [][]string) {
 	if arg0 == "exit" {
 		s.BuiltinExit(commands[0])
 		return
+	} else if arg0 == "help" {
+		s.BuiltinHelp(commands[0])
+		return
+	} else if arg0 == "exec" {
+		s.BuiltinExec(commands[0])
+		return
 	} else if arg0 == "cd" {
 		s.BuiltinCd(commands[0])
 		return
@@ -339,6 +347,32 @@ func (s *State) ExecuteFile(fileName string) {
 
 func (s *State) BuiltinExit(args []string) {
 	s.Quit(0)
+}
+
+func (s *State) BuiltinHelp(args []string) {
+	fmt.Fprintf(os.Stderr, `ush: a shell with a microscopic feature set
+
+  help    Show this message
+  exit    Exit the shell
+  exec    Replaces shell with new process
+  cd      Change the current directory
+  set     Set an environment variable's value
+  unset   Delete an environment variable
+  alias   Register an alias for a command
+  source  Load and execute a file
+
+`)
+}
+
+func (s *State) BuiltinExec(args []string) {
+	if len(args) <= 1 {
+		s.ReportError("exec needs at least 1 argument")
+		return
+	}
+	err := syscall.Exec(args[1], args[1:], os.Environ())
+	if err != nil {
+		s.ReportError("error calling exec: %v: %v", args, err.Error())
+	}
 }
 
 func (s *State) BuiltinCd(args []string) {
@@ -434,7 +468,9 @@ func main() {
 
 	// Execute ~/.ushrc
 	if s.configFileName != "" {
-		s.ExecuteFile(s.configFileName)
+		if _, err := os.Stat(s.configFileName); err == nil {
+			s.ExecuteFile(s.configFileName)
+		}
 	}
 
 	// Handle args
@@ -457,6 +493,7 @@ func main() {
 	}()
 
 	// Main interactive loop
+	errCount := 0
 	for {
 		prompt := filepath.Base(s.Cwd) + "$ "
 		if line, err := s.linerState.Prompt(prompt); err == nil {
@@ -465,7 +502,12 @@ func main() {
 		} else if err == liner.ErrPromptAborted {
 			continue
 		} else {
-			s.ReportError("ush: error reading line: %v", err)
+			s.ReportError("error reading line: %v", err)
+			errCount += 1
+			if errCount >= 10 {
+				s.ReportError("too many errors, exiting")
+				os.Exit(10)
+			}
 		}
 	}
 }
