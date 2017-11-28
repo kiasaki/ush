@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	shellquote "github.com/kballard/go-shellquote"
+	"github.com/kiasaki/ush/parser"
 	"github.com/peterh/liner"
 )
 
@@ -142,7 +142,7 @@ func (s *State) defaultAutocomplete(line string) []string {
 }
 
 func (s *State) ParseLine(line string) [][]string {
-	words, err := shellquote.Split(line)
+	words, err := parser.Parse(line)
 	if err != nil {
 		s.ReportError("error parsing line [%s] %v", line, err)
 	}
@@ -216,7 +216,7 @@ func (s *State) createSubprocess(command []string, in *io.PipeReader, out *io.Pi
 
 		err := cmd.Start()
 		if err != nil {
-			s.ReportError("error running [%s] %v", shellquote.Join(command...), err)
+			s.ReportError("error running [%s] %v", parser.Format(command...), err)
 		} else {
 			currentCmd = cmd // Set global for signal fowarding
 			err = cmd.Wait()
@@ -224,7 +224,7 @@ func (s *State) createSubprocess(command []string, in *io.PipeReader, out *io.Pi
 				if statusCode, ok := commandErrorExitCode(err); ok {
 					os.Setenv("exit", strconv.Itoa(statusCode))
 				} else {
-					s.ReportError("error running [%s] %v", shellquote.Join(command...), err)
+					s.ReportError("error running [%s] %v", parser.Format(command...), err)
 				}
 			}
 			if in != nil {
@@ -395,7 +395,7 @@ func (s *State) BuiltinCd(args []string) {
 
 func (s *State) BuiltinSet(args []string) {
 	if len(args) != 3 {
-		s.ReportError("set needs 2 arguments, got [%s]", shellquote.Join(args...))
+		s.ReportError("set needs 2 arguments, got [%s]", parser.Format(args...))
 		return
 	}
 	os.Setenv(args[1], args[2])
@@ -403,7 +403,7 @@ func (s *State) BuiltinSet(args []string) {
 
 func (s *State) BuiltinUnset(args []string) {
 	if len(args) != 2 {
-		s.ReportError("unset needs 1 argument, got [%s]", shellquote.Join(args...))
+		s.ReportError("unset needs 1 argument, got [%s]", parser.Format(args...))
 		return
 	}
 	os.Unsetenv(args[1])
@@ -411,7 +411,7 @@ func (s *State) BuiltinUnset(args []string) {
 
 func (s *State) BuiltinAlias(args []string) {
 	if len(args) != 3 {
-		s.ReportError("alias needs 2 arguments, got [%s]", shellquote.Join(args...))
+		s.ReportError("alias needs 2 arguments, got [%s]", parser.Format(args...))
 		return
 	}
 	s.Aliases[args[1]] = args[2]
@@ -419,7 +419,7 @@ func (s *State) BuiltinAlias(args []string) {
 
 func (s *State) BuiltinSource(args []string) {
 	if len(args) != 2 {
-		s.ReportError("source needs 1 argument, got [%s]", shellquote.Join(args...))
+		s.ReportError("source needs 1 argument, got [%s]", parser.Format(args...))
 		return
 	}
 	s.ExecuteFile(args[1])
