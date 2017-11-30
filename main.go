@@ -20,6 +20,8 @@ import (
 	"github.com/peterh/liner"
 )
 
+var ushVersion = "devel"
+
 var varRegexp = regexp.MustCompile(`\$[a-zA-Z_]+`)
 
 var currentCmd *exec.Cmd
@@ -227,12 +229,12 @@ func (s *State) createSubprocess(command []string, in *io.PipeReader, out *io.Pi
 					s.ReportError("error running [%s] %v", parser.Format(command...), err)
 				}
 			}
-			if in != nil {
-				in.Close()
-			}
-			if out != nil {
-				out.Close()
-			}
+		}
+		if in != nil {
+			in.Close()
+		}
+		if out != nil {
+			out.Close()
 		}
 
 		ch <- true
@@ -351,6 +353,14 @@ func (s *State) BuiltinExit(args []string) {
 
 func (s *State) BuiltinHelp(args []string) {
 	fmt.Fprintf(os.Stderr, `ush: a shell with a microscopic feature set
+
+Args
+
+  -v --version  Show ush's version
+  -h --help     Show this message
+  -c            Run the following command and exit
+
+Builtins
 
   help    Show this message
   exit    Exit the shell
@@ -475,12 +485,36 @@ func main() {
 
 	// Handle args
 	ranFile := false
-	for _, arg := range os.Args[1:] {
-		if arg[0] == '-' {
-			break // ignore args or --
+	for i, arg := range os.Args[1:] {
+		if arg == "-v" || arg == "-V" || arg == "--version" || arg == "version" {
+			fmt.Fprintf(os.Stderr, "ush version %s\n", ushVersion)
+			s.Quit(0)
 		}
-		ranFile = true
-		s.ExecuteFile(arg)
+		if arg == "-h" || arg == "-H" || arg == "--help" || arg == "help" {
+			s.BuiltinHelp([]string{})
+			s.Quit(0)
+		}
+		if arg == "-c" {
+			command := os.Args[i+2:]
+			if len(command) == 0 {
+				s.ReportError("called with '-c' but missing a command")
+				return
+			}
+			s.Execute([][]string{command})
+			s.Quit(0)
+			return
+		}
+		if arg[0] == '-' {
+			// ignore unknown args starting with - or --
+			continue
+		}
+		if _, err := os.Stat(arg); err == nil {
+			ranFile = true
+			s.ExecuteFile(arg)
+		} else {
+			s.ReportError("\"%s\" is not a file", arg)
+			return
+		}
 	}
 	if ranFile {
 		s.Quit(0) // Exit before starting interactive more if we ran a file
