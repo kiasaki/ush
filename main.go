@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	"github.com/kiasaki/ush/parser"
-	"github.com/peterh/liner"
 )
 
 var ushVersion = "devel"
@@ -31,7 +29,7 @@ type State struct {
 	Cwd             string
 	IsInteractive   bool
 	Aliases         map[string]string
-	linerState      *liner.State
+	prompt          *Prompt
 	configFileName  string
 	historyFileName string
 	history         string
@@ -42,7 +40,7 @@ func NewState() *State {
 		Cwd:             "/",
 		IsInteractive:   false,
 		Aliases:         map[string]string{},
-		linerState:      nil,
+		prompt:          NewPrompt(),
 		configFileName:  "",
 		historyFileName: "",
 		history:         "",
@@ -66,7 +64,7 @@ func NewState() *State {
 		if contents, err := ioutil.ReadFile(s.historyFileName); err != nil {
 			s.ReportError("error reading history file")
 		} else {
-			s.history = string(contents)
+			s.prompt.LoadHistory(string(contents))
 		}
 	}
 
@@ -74,30 +72,24 @@ func NewState() *State {
 }
 
 func (s *State) Stop() {
-	if s.linerState != nil {
-		b := bytes.NewBuffer([]byte{})
-		s.linerState.WriteHistory(b)
-		s.history = string(b.Bytes())
-
-		s.linerState.Close()
-		s.linerState = nil
+	if s.prompt != nil {
+		s.prompt.Stop()
+		s.prompt = nil
 	}
 }
 
 func (s *State) Start() {
-	s.linerState = liner.NewLiner()
-	s.linerState.SetCompleter(s.defaultAutocomplete)
-	s.linerState.ReadHistory(strings.NewReader(s.history))
+	s.prompt.Start()
 }
 
 func (s *State) Quit(statusCode int) {
-	// Stop liner and write history to s.history
-	s.Stop()
-
 	// Save history to disk
-	if err := ioutil.WriteFile(s.historyFileName, []byte(s.history), 0755); err != nil {
+	history := []byte(s.prompt.History())
+	if err := ioutil.WriteFile(s.historyFileName, history, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "ush: error writing history file")
 	}
+
+	s.Stop()
 
 	os.Exit(statusCode)
 }
@@ -305,9 +297,6 @@ func (s *State) Execute(commands [][]string) {
 		commands = append(commands, commandsRest...)
 	}
 
-	// Stop liner to reset terminal input settings
-	s.Stop()
-
 	processCount := len(commands)
 	pipes := makeSubprocessPipes(processCount)
 	ch := make(chan bool, len(commands))
@@ -326,9 +315,6 @@ func (s *State) Execute(commands [][]string) {
 	}
 
 	waitSubprocess(processCount, ch)
-
-	// Restart liner
-	s.Start()
 }
 
 // }}}
@@ -530,10 +516,11 @@ func main() {
 	errCount := 0
 	for {
 		prompt := filepath.Base(s.Cwd) + "$ "
-		if line, err := s.linerState.Prompt(prompt); err == nil {
-			s.linerState.AppendHistory(line)
+		if line, err := s.prompt.Prompt(prompt); err == nil {
+			s.prompt.AppendHistory(line)
 			s.ExecuteLine(line)
-		} else if err == liner.ErrPromptAborted {
+		} else if err == ErrorPromptAborted {
+			fmt.Println()
 			continue
 		} else {
 			s.ReportError("error reading line: %v", err)

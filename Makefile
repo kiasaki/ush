@@ -23,7 +23,7 @@ endif
 
 
 $(TARGET): $(SOURCES)
-	go build -ldflags "-X main.ushVersion=$(VERSION)" -o $(TARGET) $(SOURCES)
+	go build -ldflags "-X main.ushVersion=$(VERSION)" -o $(TARGET) .
 
 install: $(TARGET)
 	install ./ush /usr/local/bin/ush
