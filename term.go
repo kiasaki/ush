@@ -11,12 +11,16 @@ import (
 )
 
 type Terminal struct {
-	in           *bufio.Reader
+	in           *os.File
+	inBuffer     *bufio.Reader
 	out          *os.File
 	runes        chan rune
 	events       chan *Event
+	running      bool
 	originalMode *termios
 	sigwinch     chan os.Signal
+	Width        int
+	Height       int
 }
 
 func NewTerminal() *Terminal {
@@ -25,14 +29,19 @@ func NewTerminal() *Terminal {
 
 func (t *Terminal) Start() error {
 	var err error
-	if in, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err != nil {
-		return err
-	} else {
-		t.in = bufio.NewReader(in)
+
+	if t.in == nil {
+		if t.in, err = os.OpenFile("/dev/tty", os.O_RDONLY, 0); err != nil {
+			return err
+		}
+		t.inBuffer = bufio.NewReader(t.in)
 	}
-	if t.out, err = os.OpenFile("/dev/tty", os.O_WRONLY, 0); err != nil {
-		return err
+	if t.out == nil {
+		if t.out, err = os.OpenFile("/dev/tty", os.O_WRONLY, 0); err != nil {
+			return err
+		}
 	}
+	t.running = true
 
 	fd := t.out.Fd()
 	t.originalMode, err = fetchMode(fd)
@@ -40,27 +49,23 @@ func (t *Terminal) Start() error {
 		return err
 	}
 	mode := cloneMode(t.originalMode)
-	// No break, No CR to NL, No parity check, No strip char, No start/stop
-	// output control
-	mode.Iflag &^= icrnl | inpck | istrip | ixon
-	// Disable post-processing
-	mode.Oflag &^= opost
-	// 8 bit chars
-	mode.Cflag |= cs8
-	// Canonical off, Echoing off, No Extendend functions, No signal chars (^C)
-	mode.Lflag &^= syscall.ECHO | icanon | iexten | isig
-	// Return each byte, or 1 for blocking
-	mode.Cc[syscall.VMIN] = 1
-	mode.Cc[syscall.VTIME] = 0
+	mode.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
+	mode.Oflag &^= syscall.OPOST
+	mode.Cflag |= syscall.CS8
+	mode.Cflag &^= syscall.CSIZE | syscall.PARENB
+	mode.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
 	err = setMode(fd, mode)
 	if err != nil {
 		return err
 	}
 
-	t.Puts(termEnterCA)
-	t.Puts(termHideCursor)
-	t.Puts(termEnterAcs)
-	t.Puts(termClear)
+	// t.Puts(termEnterCA)
+	// t.Puts(termEnterAcs)
+
+	t.Width, t.Height, err = windowSize(t.out.Fd())
+	if err != nil {
+		return err
+	}
 
 	t.sigwinch = make(chan os.Signal, 1)
 	signal.Notify(t.sigwinch, syscall.SIGWINCH)
@@ -74,14 +79,18 @@ func (t *Terminal) Start() error {
 }
 
 func (t *Terminal) Stop() {
-	fd := t.out.Fd()
-	setMode(fd, t.originalMode)
+	t.running = false
+
+	close(t.runes)
+	close(t.events)
+
+	signal.Reset(syscall.SIGWINCH)
 
 	t.Puts(termShowCursor)
-	t.Puts(termClear)
-	t.Puts(termExitAcs)
-	t.Puts(termExitCA)
-	// t.Puts(termClear)
+	// t.Puts(termExitAcs)
+	// t.Puts(termExitCA)
+
+	setMode(t.out.Fd(), t.originalMode)
 }
 
 type EventType int
@@ -99,21 +108,36 @@ type Event struct {
 
 func (t *Terminal) readRunes() {
 	for {
-		r, _, err := t.in.ReadRune()
+		r, _, err := t.inBuffer.ReadRune()
+		if !t.running {
+			return
+		}
 		if err != nil {
 			panic(err) // TODO don't panic
 		}
 		t.runes <- r
-
 	}
 }
 
 func (t *Terminal) readEvents() {
 	for {
 		select {
-		case <-t.sigwinch:
+		case _, ok := <-t.sigwinch:
+			if !ok {
+				return
+			}
+			var err error
+			t.Width, t.Height, err = windowSize(t.out.Fd())
+			if err != nil {
+				// TODO error event
+				t.Stop()
+				panic(err)
+			}
 			t.events <- &Event{Type: EventResize}
-		case r := <-t.runes:
+		case r, ok := <-t.runes:
+			if !ok {
+				return
+			}
 			seq := []rune{r}
 
 			// Gather up a few more characters for 50ms
@@ -201,41 +225,65 @@ func (t *Terminal) Puts(f string, args ...interface{}) {
 }
 
 const (
-	termClear      string = "\x1b[H\x1b[J"
-	termSetColor          = "\x1b[%d;%dm"
-	termSetFgBg           = "\x1b[3%d;4%dm"
-	termAttrOff           = "\x1b[0;10m"
-	termReset             = "\x1b[0m"
-	termEnterAcs          = "\x1b[11m"
-	termExitAcs           = "\x1b[10m"
-	termEnterCA           = "\x1b[?1049h"
-	termExitCA            = "\x1b[r\x1b[?1049l"
-	termHideCursor        = "\x1b[?25l"
-	termShowCursor        = "\x1b[?25h"
-	termSetCursor         = "\x1b[%d;%dH"
+	termClear           string = "\x1b[H\x1b[J"
+	termClearLine              = "\x1b[0K"
+	termSetColor               = "\x1b[%d;%dm"
+	termSetFgBg                = "\x1b[3%d;4%dm"
+	termAttrOff                = "\x1b[0;10m"
+	termReset                  = "\x1b[0m"
+	termEnterAcs               = "\x1b[11m"
+	termExitAcs                = "\x1b[10m"
+	termEnterCA                = "\x1b[?1049h"
+	termExitCA                 = "\x1b[r\x1b[?1049l"
+	termHideCursor             = "\x1b[?25l"
+	termShowCursor             = "\x1b[?25h"
+	termSetCursor              = "\x1b[%d;%dH"
+	termSetCursorColumn        = "\x1b[%dG"
 )
 
 func (t *Terminal) Clear() {
-	fmt.Print(termClear)
+	t.Puts(termClear)
 }
 
-func (t *Terminal) MoveCursor(x, y int) {
+func (t *Terminal) ShowCursor() {
+	t.Puts(termShowCursor)
+}
+
+func (t *Terminal) HideCursor() {
+	t.Puts(termHideCursor)
+}
+
+func (t *Terminal) ClearLine() {
+	t.Puts(termClearLine)
+}
+
+func (t *Terminal) SetCursor(x, y int) {
 	t.Puts(termSetCursor, y+1, x+1)
 }
 
-func (t *Terminal) SetColor(c Color, bright bool) {
+func (t *Terminal) SetCursorColumn(x int) {
+	t.Puts(termSetCursorColumn, x+1)
+}
+
+func (t *Terminal) SetColor(c Color, isBg bool) {
 	var brightValue = 0
-	if bright {
+	if c > 8 && c <= 16 {
+		c -= 8
 		brightValue = 1
+	}
+	if isBg {
+		c += 40
+	} else {
+		c += 30
 	}
 	t.Puts(termSetColor, brightValue, c)
 }
-func (t *Terminal) SetFg(c Color, bright bool) {
-	t.SetColor(30+c, bright)
+func (t *Terminal) SetFg(c Color) {
+	t.SetColor(c, false)
 }
 
-func (t *Terminal) SetBg(c Color, bright bool) {
-	t.SetColor(40+c, bright)
+func (t *Terminal) SetBg(c Color) {
+	t.SetColor(c, true)
 }
 
 type Color int
@@ -248,42 +296,57 @@ const (
 	ColorBlue
 	ColorPurple
 	ColorCyan
-	ColorWhite
+	ColorLightGray
 	ColorDefault
+)
+
+const (
+	ColorGray Color = iota + 9
+	ColorBrightRed
+	ColorBrightGreen
+	ColorBrightYellow
+	ColorBrightBlue
+	ColorBrightPurple
+	ColorBrightCyan
+	ColorWhite
 )
 
 type Key int
 
 const (
-	KeyNull  Key = 0
-	KeyCtrlA     = 1
-	KeyCtrlB     = 2
-	KeyCtrlC     = 3
-	KeyCtrlD     = 4
-	KeyCtrlE     = 5
-	KeyCtrlF     = 6
-	KeyCtrlG     = 7
-	KeyCtrlH     = 8
-	KeyTab       = 9
-	KeyLf        = 10
-	KeyCtrlK     = 11
-	KeyCtrlL     = 12
-	KeyCr        = 13
-	KeyCtrlN     = 14
-	KeyCtrlO     = 15
-	KeyCtrlP     = 16
-	KeyCtrlQ     = 17
-	KeyCtrlR     = 18
-	KeyCtrlS     = 19
-	KeyCtrlT     = 20
-	KeyCtrlU     = 21
-	KeyCtrlV     = 22
-	KeyCtrlW     = 23
-	KeyCtrlX     = 24
-	KeyCtrlY     = 25
-	KeyCtrlZ     = 26
-	KeyEsc       = 27
-	KeyBs        = 127
+	KeyNull      Key = 0
+	KeyCtrlA         = 1
+	KeyCtrlB         = 2
+	KeyCtrlC         = 3
+	KeyCtrlD         = 4
+	KeyCtrlE         = 5
+	KeyCtrlF         = 6
+	KeyCtrlG         = 7
+	KeyCtrlH         = 8
+	KeyTab           = 9
+	KeyNl            = 10
+	KeyCtrlK         = 11
+	KeyCtrlL         = 12
+	KeyCr            = 13
+	KeyCtrlN         = 14
+	KeyCtrlO         = 15
+	KeyCtrlP         = 16
+	KeyCtrlQ         = 17
+	KeyCtrlR         = 18
+	KeyCtrlS         = 19
+	KeyCtrlT         = 20
+	KeyCtrlU         = 21
+	KeyCtrlV         = 22
+	KeyCtrlW         = 23
+	KeyCtrlX         = 24
+	KeyCtrlY         = 25
+	KeyCtrlZ         = 26
+	KeyEsc           = 27
+	KeyFs            = 28
+	KeyGs            = 29
+	KeyRs            = 30
+	KeyUs            = 31
+	KeyBackspace     = 127
 )
 
 const (
@@ -350,4 +413,15 @@ func fetchMode(fd uintptr) (*termios, error) {
 		return nil, fmt.Errorf("Got error number %d fetching terminal mode", errno)
 	}
 	return &mode, nil
+}
+
+func windowSize(fd uintptr) (int, int, error) {
+	dim := [4]uint16{}
+	dimp := uintptr(unsafe.Pointer(&dim))
+	ioc := uintptr(syscall.TIOCGWINSZ)
+	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL,
+		fd, ioc, dimp, 0, 0, 0); err != 0 {
+		return -1, -1, err
+	}
+	return int(dim[1]), int(dim[0]), nil
 }

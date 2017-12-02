@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"errors"
-	"io"
 	"os"
 	"strings"
 )
@@ -25,11 +24,9 @@ func NewPrompt() *Prompt {
 }
 
 func (p *Prompt) Start() {
-	p.terminal.Start()
 }
 
 func (p *Prompt) Stop() {
-	p.terminal.Stop()
 }
 
 func (p *Prompt) History() string {
@@ -52,18 +49,46 @@ func (p *Prompt) AppendHistory(line string) {
 }
 
 func (p *Prompt) Prompt(prompt string) (string, error) {
-	os.Stdout.Write([]byte(prompt))
-	line, _, err := p.in.ReadLine()
-	if err == io.EOF {
-		return "", ErrorPromptAborted
-	}
-	for r := range line {
-		if r == KeyCtrlC {
-			return "", ErrorPromptAborted
+	p.terminal.Start()
+	defer p.terminal.Stop()
+	//p.terminal.Clear()
+	//p.terminal.SetCursor(0, 0)
+	p.terminal.Puts(prompt)
+
+	line := ""
+	for {
+		ev := <-p.terminal.Events()
+		if ev.Type == EventKey {
+			if ev.Key == KeyCtrlC || ev.Key == KeyCtrlD {
+				return "", ErrorPromptAborted
+			}
+			if ev.Key == KeyCr {
+				p.terminal.Puts("\n")
+				p.terminal.SetCursorColumn(0)
+				break
+			}
+			if ev.Key == KeyBackspace {
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+				}
+			} else if ev.Key == KeyCtrlU {
+				line = ""
+			} else if ev.Key == KeyCtrlL {
+				p.terminal.Clear()
+			} else if ev.Key == KeyRune {
+				line += string(ev.Rune)
+			} else {
+				// TODO remove debug
+				p.terminal.Puts("\n")
+				p.terminal.SetCursorColumn(0)
+				p.terminal.Puts("unknown key: ", int(ev.Key), ev.Rune)
+			}
 		}
-		if r == KeyCtrlD {
-			return "", ErrorPromptAborted
-		}
+		p.terminal.SetCursorColumn(0)
+		p.terminal.Puts(strings.Repeat(" ", p.terminal.Width))
+		p.terminal.SetCursorColumn(0)
+		p.terminal.Puts(prompt + line)
 	}
-	return string(line), err
+
+	return string(line), nil
 }
