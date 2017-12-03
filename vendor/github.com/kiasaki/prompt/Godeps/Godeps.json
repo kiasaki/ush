@@ -1,0 +1,11 @@
+{
+	"ImportPath": "github.com/kiasaki/prompt",
+	"GoVersion": "go1.8",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "github.com/kiasaki/term",
+			"Rev": "2353eb81761536c2fe7ac5ff29ac3d3616d2af64"
+		}
+	]
+}

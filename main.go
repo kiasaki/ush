@@ -499,7 +499,6 @@ func main() {
 	s.IsInteractive = true
 
 	// Main interactive loop
-	errCount := 0
 	for {
 		promptLine := filepath.Base(s.Cwd) + "$ "
 		if line, err := s.prompt.Prompt(promptLine); err == nil {
@@ -510,11 +509,7 @@ func main() {
 			continue
 		} else {
 			s.ReportError("error reading line: %v", err)
-			errCount += 1
-			if errCount >= 10 {
-				s.ReportError("too many errors, exiting")
-				os.Exit(10)
-			}
+			s.Quit(1)
 		}
 	}
 }
