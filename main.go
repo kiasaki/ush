@@ -71,17 +71,6 @@ func NewState() *State {
 	return s
 }
 
-func (s *State) Stop() {
-	if s.prompt != nil {
-		s.prompt.Stop()
-		s.prompt = nil
-	}
-}
-
-func (s *State) Start() {
-	s.prompt.Start()
-}
-
 func (s *State) Quit(statusCode int) {
 	// Save history to disk
 	history := []byte(s.prompt.History())
@@ -507,10 +496,6 @@ func main() {
 	}
 
 	s.IsInteractive = true
-	s.Start()
-	defer func() {
-		s.Stop() // Ensure we exit cleanly
-	}()
 
 	// Main interactive loop
 	errCount := 0
