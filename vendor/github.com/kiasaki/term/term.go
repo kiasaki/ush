@@ -34,7 +34,11 @@ func (t *Terminal) Start() error {
 		if t.in, err = os.OpenFile("/dev/tty", os.O_RDONLY, 0); err != nil {
 			return err
 		}
+	}
+	if t.inBuffer == nil {
 		t.inBuffer = bufio.NewReader(t.in)
+	} else {
+		t.inBuffer.Reset(t.in)
 	}
 	if t.out == nil {
 		if t.out, err = os.OpenFile("/dev/tty", os.O_WRONLY, 0); err != nil {
@@ -86,6 +90,9 @@ func (t *Terminal) Stop() {
 	t.Puts(termShowCursor)
 
 	setMode(t.out.Fd(), t.originalMode)
+
+	// Make sure we stop reading text from stdin
+	t.inBuffer.Reset(&NopReader{})
 }
 
 type EventType int
@@ -425,4 +432,10 @@ func windowSize(fd uintptr) (int, int, error) {
 		return -1, -1, err
 	}
 	return int(dim[1]), int(dim[0]), nil
+}
+
+type NopReader struct{}
+
+func (w *NopReader) Read(b []byte) (int, error) {
+	return len(b), nil
 }
