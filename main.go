@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kiasaki/prompt"
 	"github.com/kiasaki/ush/parser"
 )
 
@@ -29,7 +30,7 @@ type State struct {
 	Cwd             string
 	IsInteractive   bool
 	Aliases         map[string]string
-	prompt          *Prompt
+	prompt          *prompt.Prompt
 	configFileName  string
 	historyFileName string
 	history         string
@@ -40,11 +41,12 @@ func NewState() *State {
 		Cwd:             "/",
 		IsInteractive:   false,
 		Aliases:         map[string]string{},
-		prompt:          NewPrompt(),
+		prompt:          prompt.NewPrompt(),
 		configFileName:  "",
 		historyFileName: "",
 		history:         "",
 	}
+	s.prompt.SetCompletionFn(s.defaultAutocomplete)
 
 	if cwd, err := os.Getwd(); err != nil {
 		s.ReportError("error reading current directory")
@@ -77,8 +79,6 @@ func (s *State) Quit(statusCode int) {
 	if err := ioutil.WriteFile(s.historyFileName, history, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "ush: error writing history file")
 	}
-
-	s.Stop()
 
 	os.Exit(statusCode)
 }
@@ -116,8 +116,9 @@ func (s *State) defaultAutocomplete(line string) []string {
 	} else {
 		for i, s := range suggestions {
 			suggestions[i] = strings.Join(parts[:len(parts)-1], " ") + " " + s
+			suggestions[i] = strings.TrimLeft(suggestions[i], " ")
 			if isDir(s) {
-				suggestions[i] += "/" // string(os.PathSeparator)
+				suggestions[i] += string(os.PathSeparator)
 			}
 		}
 		return suggestions
@@ -500,11 +501,11 @@ func main() {
 	// Main interactive loop
 	errCount := 0
 	for {
-		prompt := filepath.Base(s.Cwd) + "$ "
-		if line, err := s.prompt.Prompt(prompt); err == nil {
+		promptLine := filepath.Base(s.Cwd) + "$ "
+		if line, err := s.prompt.Prompt(promptLine); err == nil {
 			s.prompt.AppendHistory(line)
 			s.ExecuteLine(line)
-		} else if err == ErrorPromptAborted {
+		} else if err == prompt.ErrorPromptAborted || err == prompt.ErrorPromptEnded {
 			fmt.Println()
 			continue
 		} else {
