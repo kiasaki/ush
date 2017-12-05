@@ -119,6 +119,8 @@ func (s *State) defaultAutocomplete(line string) []string {
 			suggestions[i] = strings.TrimLeft(suggestions[i], " ")
 			if isDir(s) {
 				suggestions[i] += string(os.PathSeparator)
+			} else {
+				suggestions[i] += " "
 			}
 		}
 		return suggestions

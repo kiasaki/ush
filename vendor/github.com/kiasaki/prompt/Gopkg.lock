@@ -5,7 +5,7 @@
   branch = "master"
   name = "github.com/kiasaki/term"
   packages = ["."]
-  revision = "1ca61f97c46a9c1d26c195bf00f74fc9107f0c78"
+  revision = "5eaeed197f153fdb874048bb23820748a64e3651"
 
 [solve-meta]
   analyzer-name = "dep"

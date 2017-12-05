@@ -5,7 +5,7 @@
   branch = "master"
   name = "github.com/kiasaki/prompt"
   packages = ["."]
-  revision = "3f83600af30da4a4cb6b60f7bfc280c5515a0230"
+  revision = "cf7240e9440bcb58c140ba7e2e3da67b203da323"
 
 [[projects]]
   branch = "master"
